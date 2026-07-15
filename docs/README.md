@@ -38,3 +38,6 @@ Change Log:
   (`bam_service.get_prometheus_base_url()`) instead of a hardcoded IP address.
 - 2026-07-09: Initial version, replacing the earlier unfinished `bdds_qps` proof-of-concept
   workflow (generic form template with no real BDDS integration).
+
+Screen Shot
+<img width="3496" height="1140" alt="image" src="https://github.com/user-attachments/assets/93bab0a4-1b4e-435e-87ad-31576178eb94" />
