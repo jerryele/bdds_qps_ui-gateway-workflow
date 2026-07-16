@@ -46,3 +46,12 @@ DISK_READS_METRIC = "bc_system_diskio_reads_since_poll"
 DISK_WRITES_METRIC = "bc_system_diskio_writes_since_poll"
 NET_RX_PACKETS_METRIC = "bc_system_netio_received_packets_since_poll"
 NET_TX_PACKETS_METRIC = "bc_system_netio_sent_packets_since_poll"
+
+# Every metric key `/current` and `/history` can return. Both endpoints accept a repeated
+# `?metric=` filter to fetch only some of these - each one skipped means real Prometheus
+# queries skipped too, not just columns/charts hidden after the fact.
+ALL_METRIC_KEYS = frozenset({
+    "dns_qps", "dhcp_lps", "cache_hit_ratio", "query_hit_ratio",
+    "cpu_percent", "memory_percent", "disk_read_iops", "disk_write_iops",
+    "net_rx_pps", "net_tx_pps",
+})

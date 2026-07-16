@@ -1,6 +1,6 @@
 <!-- Copyright 2026 BlueCat Networks (USA) Inc. and its affiliates. All Rights Reserved. -->
 
-Workflow Version: **1.10** <br/>
+Workflow Version: **1.11** <br/>
 Project Title: **BDDS Performance Statistics** <br/>
 Author: **jli@bluecatnetworks.com** <br/>
 Date: **15-07-2026** <br/>
@@ -42,12 +42,23 @@ Prometheus, in order, each with the query string, the full request URL, and the 
 Prometheus JSON response (or `error` if the request failed). Purely informational, for the
 UI's "API calls to BAM's Prometheus" panel — nothing else in this workflow reads it.
 
+Both `/current` and `/history` accept a repeated `?metric=<key>` filter (keys listed in
+`ALL_METRIC_KEYS`) scoping which metrics are fetched *at all* — an unlisted metric isn't
+queried against Prometheus, not just hidden from the response afterward. Omit `?metric=`
+entirely to fetch every metric (the default, for callers that predate this filter, e.g.
+Swagger). The UI always sends this param explicitly, using the reserved value
+`?metric=none` for "every checkbox is off" (there's no other way to tell "sent as empty"
+apart from "not sent at all" from a plain query string). An unrecognized metric key is a
+`400`, not a silent ignore.
+
 REST endpoints (mounted at `/bdds_qps/v1/stats`):
 - `GET /bdds_qps/v1/stats/servers` — list BDDS servers currently reporting to Prometheus.
 - `GET /bdds_qps/v1/stats/current` — current DNS QPS / DHCP LPS / cache hit ratio / query hit
   ratio / CPU % / memory % / disk read+write IOPS / network RX+TX pps for all servers (plus
-  a `totals` rollup), or for one server via `?server=<exported_instance>`.
+  a `totals` rollup), or for one server via `?server=<exported_instance>`. Scope which
+  metrics are fetched with `?metric=`.
 - `GET /bdds_qps/v1/stats/history` — the same ten metrics as time series over a window.
+  Same `?metric=` filter as `/current`.
 - `GET /bdds_qps/v1/doc/` — Swagger UI for the above.
 
 UI page: `/bdds_qps_ui/page` (nav entry "BDDS Performance Statistics"), polls `/current` every 60
@@ -56,9 +67,10 @@ just re-read the same sample. A "Select metrics" panel between the server picker
 results table has 8 checkboxes, one per chart slot (DNS QPS, DHCP LPS, Cache Hit %, Query
 Hit %, CPU %, Memory %, **Disk IOPS**, **Network pkt/s**) — the last two each control *two*
 result-table columns at once (Disk Read + Disk Write IOPS, Net RX + Net TX pkt/s), even
-though those stay four separate columns in the table itself. All ten underlying metrics are
-always fetched in one `/current` call, so toggling a checkbox is an instant client-side
-re-render, not a new request.
+though those stay four separate columns in the table itself. Toggling a checkbox re-fetches
+`/current` and `/history` with `?metric=` scoped to exactly what's now checked — unchecked
+metrics aren't queried against Prometheus at all while they're off, not just hidden in the
+UI after being fetched anyway.
 
 The history charts below mirror the same 8 checkboxes 1:1. Disk IOPS and Network pkt/s were
 already single charts (one line per (server, metric), labeled e.g. "bdds251a Read" /
@@ -68,8 +80,6 @@ Charts lay out across up to two rows of up to four each (max 8 total, which is a
 total number of slots, so everything checked always fits). Each row's charts split its width
 evenly, so 1 selected slot gets a full-width chart, 2 get half-width, etc. Percentage metrics
 (Cache Hit %, Query Hit %, CPU %, Memory %) get a fixed 0-100% Y axis; the rest auto-scale.
-Toggling a checkbox re-renders the chart rows from the already-fetched `/history` response,
-not a new request — same instant-re-render approach as the table.
 
 The section's overall height is always reserved for two full rows, even when only one row
 of charts is populated (an invisible placeholder panel fills the unused row) — so toggling
@@ -87,6 +97,10 @@ Known Errors and Bugs:
 - Server-side rate is only as fresh as BAM's Prometheus scrape interval (1 minute).
 
 Change Log:
+- 2026-07-16: `/current` and `/history` now accept a `?metric=` filter - unchecking a
+  metric in the UI now skips its Prometheus queries entirely (a real refetch with a
+  narrower `?metric=` list), instead of always fetching everything and hiding columns/
+  charts client-side afterward.
 - 2026-07-15: The "Select metrics" panel now has one checkbox per chart slot (8, not 10) -
   Disk Read/Write IOPS share one checkbox, as do Net RX/TX pkt/s, so a chart and its table
   columns always show/hide together instead of independently. Table columns are still four

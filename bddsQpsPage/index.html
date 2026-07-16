@@ -715,6 +715,14 @@
     return sel.value || "";
   }
 
+  // "none" is a reserved sentinel meaning "every metric checkbox is off, fetch nothing" -
+  // omitting `?metric=` entirely instead would mean "fetch everything" server-side, since
+  // that's how callers who predate this filter (e.g. Swagger) get full results.
+  function metricParams() {
+    var keys = selectedMetrics().map(function (m) { return m.key; });
+    return (keys.length ? keys : ["none"]).map(function (k) { return "metric=" + encodeURIComponent(k); });
+  }
+
   function addressOnly(instance) {
     // `instance` is Prometheus's "ip:port" scrape target label; the port is an
     // implementation detail (the exporter port, not anything a reader needs), so only
@@ -858,11 +866,6 @@
   var METRIC_TO_GROUP_KEY = {};
   CHART_GROUPS.forEach(function (g) { g.metrics.forEach(function (k) { METRIC_TO_GROUP_KEY[k] = g.key; }); });
 
-  // Cache/render the last /current response so toggling a metric checkbox can redraw the
-  // table instantly without a redundant round trip to the server.
-  var lastServers = [];
-  var lastTotals = {};
-
   function selectedMetrics() {
     return METRICS.filter(function (m) { return isMetricChecked(m.key); });
   }
@@ -879,8 +882,11 @@
       cb.checked = true;
       cb.addEventListener("change", function () {
         syncSelectAllMetricsState();
-        renderRows(lastServers, lastTotals);
-        renderHistoryCharts(lastHistorySeries);
+        // Which metrics are checked changes what /current and /history actually fetch
+        // (unchecked metrics aren't queried against Prometheus at all), so this needs a
+        // real refetch, unlike server/config changes which only ever re-scope existing data.
+        refresh();
+        loadHistory();
       });
       var label = document.createElement("label");
       label.setAttribute("for", cb.id);
@@ -901,16 +907,14 @@
   function wireSelectAllMetrics() {
     document.getElementById("selectAllMetrics").addEventListener("change", function (e) {
       CHART_GROUPS.forEach(function (g) { document.getElementById("metric-" + g.key).checked = e.target.checked; });
-      renderRows(lastServers, lastTotals);
-      renderHistoryCharts(lastHistorySeries);
+      refresh();
+      loadHistory();
     });
   }
 
   function renderRows(servers, totals) {
     servers = servers || [];
     totals = totals || {};
-    lastServers = servers;
-    lastTotals = totals;
 
     var metrics = selectedMetrics();
     var colCount = 2 + metrics.length;
@@ -1141,10 +1145,6 @@
     formatAxis: function (v) { return v.toFixed(0) + "%"; }
   };
 
-  // Cache last-fetched history series so toggling a metric checkbox can redraw the chart
-  // rows instantly without a redundant round trip, same as renderRows/lastServers.
-  var lastHistorySeries = {};
-
   function isMetricChecked(key) {
     var cb = document.getElementById("metric-" + (METRIC_TO_GROUP_KEY[key] || key));
     return !cb || cb.checked;
@@ -1242,19 +1242,17 @@
 
   function loadHistory() {
     if (!selectedServers().length) {
-      lastHistorySeries = {};
-      renderHistoryCharts(lastHistorySeries);
+      renderHistoryCharts({});
       return Promise.resolve();
     }
 
     var window = currentHistoryWindow();
     if (!window.start || !window.end) {
-      lastHistorySeries = {};
-      renderHistoryCharts(lastHistorySeries);
+      renderHistoryCharts({});
       return Promise.resolve();
     }
 
-    var params = [];
+    var params = metricParams();
     var configuration = currentConfiguration();
     if (configuration) params.push("configuration=" + encodeURIComponent(configuration));
     selectedServers().forEach(function (s) { params.push("server=" + encodeURIComponent(s)); });
@@ -1263,8 +1261,7 @@
 
     return fetchJSON(API_BASE + "/history?" + params.join("&"))
       .then(function (data) {
-        lastHistorySeries = data.series || {};
-        renderHistoryCharts(lastHistorySeries);
+        renderHistoryCharts(data.series || {});
       })
       .catch(function () {
         // The charts are supplementary to the table above; a failed history fetch
@@ -1324,12 +1321,12 @@
       return Promise.resolve();
     }
 
-    var params = [];
+    var params = metricParams();
     var configuration = currentConfiguration();
     if (configuration) params.push("configuration=" + encodeURIComponent(configuration));
     selectedServers().forEach(function (s) { params.push("server=" + encodeURIComponent(s)); });
 
-    var url = API_BASE + "/current" + (params.length ? "?" + params.join("&") : "");
+    var url = API_BASE + "/current?" + params.join("&");
 
     return fetchJSON(url)
       .then(function (data) {
