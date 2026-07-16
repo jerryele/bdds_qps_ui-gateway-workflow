@@ -186,8 +186,9 @@
 
   /* History charts */
   #historyHeader { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 16px; }
-  #historyPanels { display: flex; align-items: stretch; gap: 16px; margin-top: 12px; }
-  .history-panels-row { display: flex; align-items: stretch; gap: 16px; margin-top: 16px; }
+  #historyChartsContainer { margin-top: 12px; }
+  .history-panels-row { display: flex; align-items: stretch; gap: 16px; }
+  .history-panels-row + .history-panels-row { margin-top: 16px; }
   .history-chart-panel { flex: 1; min-width: 0; }
   .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 16px; }
 
@@ -379,53 +380,7 @@
         </div>
       </div>
 
-      <div id="historyPanels">
-        <section class="panel history-chart-panel">
-          <div class="chart-header">
-            <span class="chart-title">DNS QPS</span>
-            <div class="chart-legend" id="chartLegendQps"></div>
-          </div>
-          <div class="chart-wrap">
-            <svg id="historyChartQps" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
-            <div class="chart-tooltip" id="chartTooltipQps"></div>
-          </div>
-        </section>
-
-        <section class="panel history-chart-panel">
-          <div class="chart-header">
-            <span class="chart-title">DHCP LPS</span>
-            <div class="chart-legend" id="chartLegendLps"></div>
-          </div>
-          <div class="chart-wrap">
-            <svg id="historyChartLps" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
-            <div class="chart-tooltip" id="chartTooltipLps"></div>
-          </div>
-        </section>
-      </div>
-
-      <div class="history-panels-row">
-        <section class="panel history-chart-panel">
-          <div class="chart-header">
-            <span class="chart-title">Cache Hit %</span>
-            <div class="chart-legend" id="chartLegendCacheHit"></div>
-          </div>
-          <div class="chart-wrap">
-            <svg id="historyChartCacheHit" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
-            <div class="chart-tooltip" id="chartTooltipCacheHit"></div>
-          </div>
-        </section>
-
-        <section class="panel history-chart-panel">
-          <div class="chart-header">
-            <span class="chart-title">Query Hit %</span>
-            <div class="chart-legend" id="chartLegendQueryHit"></div>
-          </div>
-          <div class="chart-wrap">
-            <svg id="historyChartQueryHit" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
-            <div class="chart-tooltip" id="chartTooltipQueryHit"></div>
-          </div>
-        </section>
-      </div>
+      <div id="historyChartsContainer"></div>
 
       <div id="apiCallsHeader">
         <span class="chart-title">API calls to BAM's Prometheus</span>
@@ -854,18 +809,26 @@
 
   // The four selectable result-table columns; "Select metrics" in the middle panel toggles
   // which of these show, same data either way (all four ride along in every /current call).
+  // `percent: true` metrics get a fixed 0-100% Y axis on their history chart instead of an
+  // auto-scaled one (see PERCENT_CHART_OPTS below) - same table column data either way.
   var METRICS = [
-    { key: "dns_qps", label: "DNS QPS", format: formatNum },
-    { key: "dhcp_lps", label: "DHCP LPS", format: formatNum },
-    { key: "cache_hit_ratio", label: "Cache Hit %", format: formatPct },
-    { key: "query_hit_ratio", label: "Query Hit %", format: formatPct },
-    { key: "cpu_percent", label: "CPU %", format: formatPct },
-    { key: "memory_percent", label: "Memory %", format: formatPct },
-    { key: "disk_read_iops", label: "Disk Read IOPS", format: formatNum },
-    { key: "disk_write_iops", label: "Disk Write IOPS", format: formatNum },
-    { key: "net_rx_pps", label: "Net RX pkt/s", format: formatNum },
-    { key: "net_tx_pps", label: "Net TX pkt/s", format: formatNum }
+    { key: "dns_qps", label: "DNS QPS", format: formatNum, percent: false },
+    { key: "dhcp_lps", label: "DHCP LPS", format: formatNum, percent: false },
+    { key: "cache_hit_ratio", label: "Cache Hit %", format: formatPct, percent: true },
+    { key: "query_hit_ratio", label: "Query Hit %", format: formatPct, percent: true },
+    { key: "cpu_percent", label: "CPU %", format: formatPct, percent: true },
+    { key: "memory_percent", label: "Memory %", format: formatPct, percent: true },
+    { key: "disk_read_iops", label: "Disk Read IOPS", format: formatNum, percent: false },
+    { key: "disk_write_iops", label: "Disk Write IOPS", format: formatNum, percent: false },
+    { key: "net_rx_pps", label: "Net RX pkt/s", format: formatNum, percent: false },
+    { key: "net_tx_pps", label: "Net TX pkt/s", format: formatNum, percent: false }
   ];
+
+  // History charts: at most 2 rows of at most 4 windows each (8 total) - if more than 8
+  // metrics are selected, only the first 8 in METRICS order get a chart (the table above
+  // still shows every selected column regardless).
+  var MAX_HISTORY_CHARTS = 8;
+  var MAX_CHARTS_PER_ROW = 4;
 
   // Cache/render the last /current response so toggling a metric checkbox can redraw the
   // table instantly without a redundant round trip to the server.
@@ -892,6 +855,7 @@
       cb.addEventListener("change", function () {
         syncSelectAllMetricsState();
         renderRows(lastServers, lastTotals);
+        renderHistoryCharts(lastHistorySeries);
       });
       var label = document.createElement("label");
       label.setAttribute("for", cb.id);
@@ -913,6 +877,7 @@
     document.getElementById("selectAllMetrics").addEventListener("change", function (e) {
       METRICS.forEach(function (m) { document.getElementById("metric-" + m.key).checked = e.target.checked; });
       renderRows(lastServers, lastTotals);
+      renderHistoryCharts(lastHistorySeries);
     });
   }
 
@@ -1142,34 +1107,79 @@
     });
   }
 
-  var QPS_CHART_IDS = { svg: "historyChartQps", legend: "chartLegendQps", tooltip: "chartTooltipQps" };
-  var LPS_CHART_IDS = { svg: "historyChartLps", legend: "chartLegendLps", tooltip: "chartTooltipLps" };
-  var CACHE_HIT_CHART_IDS = { svg: "historyChartCacheHit", legend: "chartLegendCacheHit", tooltip: "chartTooltipCacheHit" };
-  var QUERY_HIT_CHART_IDS = { svg: "historyChartQueryHit", legend: "chartLegendQueryHit", tooltip: "chartTooltipQueryHit" };
-  // Hit ratios are percentages: always scale the Y axis to a fixed 0-100%, rather than the
-  // auto-scaled "nice" max used for QPS/LPS, and format values with a "%" suffix.
+  // Hit ratios and CPU/memory % are percentages: always scale the Y axis to a fixed
+  // 0-100%, rather than the auto-scaled "nice" max used for rate-style metrics, and
+  // format values with a "%" suffix.
   var PERCENT_CHART_OPTS = {
     fixedMax: 100,
     formatValue: function (v) { return v.toFixed(2) + "%"; },
     formatAxis: function (v) { return v.toFixed(0) + "%"; }
   };
 
-  function renderEmptyHistory() {
-    renderChart([], QPS_CHART_IDS);
-    renderChart([], LPS_CHART_IDS);
-    renderChart([], CACHE_HIT_CHART_IDS, PERCENT_CHART_OPTS);
-    renderChart([], QUERY_HIT_CHART_IDS, PERCENT_CHART_OPTS);
+  // Cache last-fetched history series so toggling a metric checkbox can redraw the chart
+  // rows instantly without a redundant round trip, same as renderRows/lastServers.
+  var lastHistorySeries = {};
+
+  function selectedChartMetrics() {
+    return selectedMetrics().slice(0, MAX_HISTORY_CHARTS);
+  }
+
+  function chartIdsFor(m) {
+    return { svg: "historyChart-" + m.key, legend: "chartLegend-" + m.key, tooltip: "chartTooltip-" + m.key };
+  }
+
+  // Fills the first row up to MAX_CHARTS_PER_ROW, overflowing any remainder into a second
+  // row - with at most MAX_HISTORY_CHARTS selected this never needs a third row.
+  function chartRows(metrics) {
+    if (!metrics.length) return [];
+    if (metrics.length <= MAX_CHARTS_PER_ROW) return [metrics];
+    return [metrics.slice(0, MAX_CHARTS_PER_ROW), metrics.slice(MAX_CHARTS_PER_ROW)];
+  }
+
+  function buildHistoryCharts(metrics) {
+    var container = document.getElementById("historyChartsContainer");
+    container.innerHTML = "";
+    chartRows(metrics).forEach(function (rowMetrics) {
+      var row = document.createElement("div");
+      row.className = "history-panels-row";
+      rowMetrics.forEach(function (m) {
+        var section = document.createElement("section");
+        section.className = "panel history-chart-panel";
+        section.innerHTML =
+          '<div class="chart-header">' +
+            '<span class="chart-title">' + m.label + '</span>' +
+            '<div class="chart-legend" id="chartLegend-' + m.key + '"></div>' +
+          '</div>' +
+          '<div class="chart-wrap">' +
+            '<svg id="historyChart-' + m.key + '" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>' +
+            '<div class="chart-tooltip" id="chartTooltip-' + m.key + '"></div>' +
+          '</div>';
+        row.appendChild(section);
+      });
+      container.appendChild(row);
+    });
+  }
+
+  function renderHistoryCharts(series) {
+    series = series || {};
+    var metrics = selectedChartMetrics();
+    buildHistoryCharts(metrics);
+    metrics.forEach(function (m) {
+      renderChart(series[m.key] || [], chartIdsFor(m), m.percent ? PERCENT_CHART_OPTS : undefined);
+    });
   }
 
   function loadHistory() {
     if (!selectedServers().length) {
-      renderEmptyHistory();
+      lastHistorySeries = {};
+      renderHistoryCharts(lastHistorySeries);
       return Promise.resolve();
     }
 
     var window = currentHistoryWindow();
     if (!window.start || !window.end) {
-      renderEmptyHistory();
+      lastHistorySeries = {};
+      renderHistoryCharts(lastHistorySeries);
       return Promise.resolve();
     }
 
@@ -1182,11 +1192,8 @@
 
     return fetchJSON(API_BASE + "/history?" + params.join("&"))
       .then(function (data) {
-        var series = data.series || {};
-        renderChart(series.dns_qps || [], QPS_CHART_IDS);
-        renderChart(series.dhcp_lps || [], LPS_CHART_IDS);
-        renderChart(series.cache_hit_ratio || [], CACHE_HIT_CHART_IDS, PERCENT_CHART_OPTS);
-        renderChart(series.query_hit_ratio || [], QUERY_HIT_CHART_IDS, PERCENT_CHART_OPTS);
+        lastHistorySeries = data.series || {};
+        renderHistoryCharts(lastHistorySeries);
       })
       .catch(function () {
         // The charts are supplementary to the table above; a failed history fetch
@@ -1274,9 +1281,10 @@
     loadHistory();
   });
 
-  // Render the (empty) table immediately so the header reflects the selected metrics even
-  // if the config/server load below fails - it shouldn't leave the header row blank.
+  // Render the (empty) table/charts immediately so they reflect the selected metrics even
+  // if the config/server load below fails - it shouldn't leave either blank.
   renderRows([]);
+  renderHistoryCharts({});
 
   loadConfigurations()
     .then(loadServers)

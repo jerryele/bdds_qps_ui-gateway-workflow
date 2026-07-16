@@ -84,8 +84,8 @@ class QPSService:
         end: datetime = None,
     ) -> dict:
         """
-        Return DNS-QPS and DHCP-LPS time series between `start` and `end`, one series per
-        server per metric.
+        Return time series for all ten `/current` metrics between `start` and `end`, one
+        series per server per metric.
 
         :param servers: A list of `exported_instance` label values to filter to. When
             empty or omitted, every server in scope is included.
@@ -105,53 +105,62 @@ class QPSService:
         step = f"{step_seconds}s"
         nsstat_filter = "|".join(DNS_REQUEST_NSSTATS)
 
-        dns_qps_series = []
-        dhcp_lps_series = []
-        cache_hit_series = []
-        query_hit_series = []
+        series = {key: [] for key in (
+            "dns_qps", "dhcp_lps", "cache_hit_ratio", "query_hit_ratio",
+            "cpu_percent", "memory_percent", "disk_read_iops", "disk_write_iops",
+            "net_rx_pps", "net_tx_pps",
+        )}
         for s in all_servers:
             instance_filter = f'exported_instance="{s["exported_instance"]}"'
+
+            def series_point(key, points):
+                series[key].append({"exported_instance": s["exported_instance"], "points": points})
 
             dns_promql = f'sum(bc_dns_nsstats_since_poll{{{instance_filter}, nsstat=~"{nsstat_filter}"}})'
             dns_result = self.client.range_query(dns_promql, start.timestamp(), end.timestamp(), step)
             # The metric is always "count over the last poll interval" regardless of the
             # query step above, so the QPS conversion always divides by the poll interval,
             # never by `step_seconds` (a coarser step only thins out how often we sample it).
-            dns_qps_series.append({
-                "exported_instance": s["exported_instance"],
-                "points": self._to_points(dns_result, scale=1 / POLL_INTERVAL_SECONDS),
-            })
+            series_point("dns_qps", self._to_points(dns_result, scale=1 / POLL_INTERVAL_SECONDS))
 
             dhcp_promql = f"bc_dhcp4_leases_per_second{{{instance_filter}}}"
             dhcp_result = self.client.range_query(dhcp_promql, start.timestamp(), end.timestamp(), step)
-            dhcp_lps_series.append({
-                "exported_instance": s["exported_instance"],
-                "points": self._to_points(dhcp_result),
-            })
+            series_point("dhcp_lps", self._to_points(dhcp_result))
 
-            cache_hit_series.append({
-                "exported_instance": s["exported_instance"],
-                "points": self._read_ratio_history(
-                    instance_filter, CACHE_HIT_CACHESTAT, CACHE_MISS_CACHESTAT, start, end, step
-                ),
-            })
-            query_hit_series.append({
-                "exported_instance": s["exported_instance"],
-                "points": self._read_ratio_history(
-                    instance_filter, QUERY_HIT_CACHESTAT, QUERY_MISS_CACHESTAT, start, end, step
-                ),
-            })
+            series_point("cache_hit_ratio", self._read_ratio_history(
+                instance_filter, CACHE_HIT_CACHESTAT, CACHE_MISS_CACHESTAT, start, end, step
+            ))
+            series_point("query_hit_ratio", self._read_ratio_history(
+                instance_filter, QUERY_HIT_CACHESTAT, QUERY_MISS_CACHESTAT, start, end, step
+            ))
+
+            cpu_promql = f"{CPU_USAGE_METRIC}{{{instance_filter}}}"
+            cpu_result = self.client.range_query(cpu_promql, start.timestamp(), end.timestamp(), step)
+            series_point("cpu_percent", self._to_points(cpu_result, scale=100))
+
+            series_point("memory_percent", self._read_metric_pair_ratio_history(
+                instance_filter, MEMORY_USED_METRIC, MEMORY_AVAILABLE_METRIC, start, end, step
+            ))
+
+            disk_history = self._read_combined_history(
+                instance_filter, [DISK_READS_METRIC, DISK_WRITES_METRIC], start, end, step,
+                scale=1 / POLL_INTERVAL_SECONDS,
+            )
+            series_point("disk_read_iops", disk_history.get(DISK_READS_METRIC, []))
+            series_point("disk_write_iops", disk_history.get(DISK_WRITES_METRIC, []))
+
+            net_history = self._read_combined_history(
+                instance_filter, [NET_RX_PACKETS_METRIC, NET_TX_PACKETS_METRIC], start, end, step,
+                scale=1 / POLL_INTERVAL_SECONDS,
+            )
+            series_point("net_rx_pps", net_history.get(NET_RX_PACKETS_METRIC, []))
+            series_point("net_tx_pps", net_history.get(NET_TX_PACKETS_METRIC, []))
 
         return {
             "start": start.isoformat(),
             "end": end.isoformat(),
             "step_seconds": step_seconds,
-            "series": {
-                "dns_qps": dns_qps_series,
-                "dhcp_lps": dhcp_lps_series,
-                "cache_hit_ratio": cache_hit_series,
-                "query_hit_ratio": query_hit_series,
-            },
+            "series": series,
         }
 
     @staticmethod
@@ -240,6 +249,43 @@ class QPSService:
         promql = f'{{__name__=~"{names_filter}", {instance_filter}}}'
         result = self.client.instant_query(promql)
         return {series["metric"]["__name__"]: float(series["value"][1]) for series in result}
+
+    def _read_combined_history(
+        self, instance_filter: str, metric_names: list, start: datetime, end: datetime, step: str, scale: float = 1.0
+    ) -> dict:
+        """
+        The history-series equivalent of `_read_metrics`: range-query several differently-
+        *named* metrics in one Prometheus request, returned as `{metric_name: points}`
+        using the same scale/rounding as `_to_points`.
+        """
+        names_filter = "|".join(metric_names)
+        promql = f'{{__name__=~"{names_filter}", {instance_filter}}}'
+        result = self.client.range_query(promql, start.timestamp(), end.timestamp(), step)
+        return {series["metric"]["__name__"]: self._to_points(result=[series], scale=scale) for series in result}
+
+    def _read_metric_pair_ratio_history(
+        self, instance_filter: str, numerator_metric: str, denominator_metric: str,
+        start: datetime, end: datetime, step: str,
+    ) -> list:
+        """
+        Return `{"t", "v"}` ratio-percentage points (numerator / (numerator + denominator) *
+        100) from two differently-*named* instant-value metrics, one point per timestamp
+        both sides report. Used for memory % (used / (used + available)) - the host-metric
+        equivalent of `_read_ratio_history`, which does the same for two metrics that share
+        one name and are distinguished by a label instead (`bc_dns_cachestats`).
+        """
+        history = self._read_combined_history(instance_filter, [numerator_metric, denominator_metric], start, end, step)
+        numerator_by_ts = {p["t"]: p["v"] for p in history.get(numerator_metric, [])}
+        denominator_by_ts = {p["t"]: p["v"] for p in history.get(denominator_metric, [])}
+
+        points = []
+        for t in sorted(numerator_by_ts):
+            if t not in denominator_by_ts:
+                continue
+            ratio = self._ratio_percent(numerator_by_ts[t], denominator_by_ts[t])
+            if ratio is not None:
+                points.append({"t": t, "v": ratio})
+        return points
 
     @staticmethod
     def _rate_per_second(since_poll_value):
