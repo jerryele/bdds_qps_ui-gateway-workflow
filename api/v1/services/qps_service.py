@@ -64,6 +64,9 @@ class QPSService:
             "poll_interval_seconds": POLL_INTERVAL_SECONDS,
             "servers": stats,
             "totals": self._compute_totals(stats, raw_counts),
+            # Every PromQL request this call made against BAM's Prometheus, for the page's
+            # "API calls to BAM's Prometheus" panel - purely informational.
+            "api_calls": self.client.calls,
         }
 
     def get_history(

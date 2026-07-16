@@ -186,6 +186,33 @@
   .history-panels-row { display: flex; align-items: stretch; gap: 16px; margin-top: 16px; }
   .history-chart-panel { flex: 1; min-width: 0; }
   .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 16px; }
+
+  /* API calls panel: raw PromQL requests this page issued against BAM's Prometheus,
+     shown for transparency/debugging - collapsed by default since there can be many. */
+  #apiCallsHeader { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 16px; }
+  #apiCallsCount { font-size: 12px; color: var(--text-muted); }
+  #apiCallsPanel { margin-top: 12px; }
+  .api-call { border-bottom: 1px solid #e0e0e0; }
+  .api-call:last-child { border-bottom: none; }
+  .api-call summary {
+    cursor: pointer; padding: 10px 4px; font-size: 13px; color: var(--text-primary);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .api-call summary .api-call-badge {
+    flex: none; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 2px;
+    color: #fff; background: var(--series-1);
+  }
+  .api-call.errored summary .api-call-badge { background: #da1e28; }
+  .api-call summary .api-call-query {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px;
+    color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .api-call pre {
+    margin: 0 4px 12px; padding: 10px 12px; background: #fafafa; border: 1px solid #e0e0e0;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px;
+    overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .api-call .api-call-url { font-size: 11.5px; color: var(--text-muted); margin: 0 4px 8px; word-break: break-all; }
   .chart-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
   .chart-legend { display: flex; gap: 16px; }
   .legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
@@ -389,6 +416,14 @@
           </div>
         </section>
       </div>
+
+      <div id="apiCallsHeader">
+        <span class="chart-title">API calls to BAM's Prometheus</span>
+        <span id="apiCallsCount"></span>
+      </div>
+      <section class="panel" id="apiCallsPanel">
+        <div id="apiCallsList"></div>
+      </section>
     </main>
   </div>
 
@@ -1076,10 +1111,54 @@
       });
   }
 
+  function renderApiCalls(calls) {
+    var countEl = document.getElementById("apiCallsCount");
+    var listEl = document.getElementById("apiCallsList");
+    listEl.innerHTML = "";
+    calls = calls || [];
+    countEl.textContent = calls.length + (calls.length === 1 ? " call" : " calls");
+
+    if (!calls.length) {
+      var empty = document.createElement("div");
+      empty.className = "chart-empty";
+      empty.textContent = "No API calls for the current selection.";
+      listEl.appendChild(empty);
+      return;
+    }
+
+    calls.forEach(function (call, i) {
+      var details = document.createElement("details");
+      details.className = "api-call" + (call.error ? " errored" : "");
+
+      var summary = document.createElement("summary");
+      var badge = document.createElement("span");
+      badge.className = "api-call-badge";
+      badge.textContent = call.error ? "ERROR" : "OK";
+      var query = document.createElement("span");
+      query.className = "api-call-query";
+      query.textContent = "#" + (i + 1) + "  " + (call.query || "(no query)");
+      summary.appendChild(badge);
+      summary.appendChild(query);
+      details.appendChild(summary);
+
+      var urlEl = document.createElement("div");
+      urlEl.className = "api-call-url";
+      urlEl.textContent = call.url;
+      details.appendChild(urlEl);
+
+      var pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(call.error ? { error: call.error } : call.response, null, 2);
+      details.appendChild(pre);
+
+      listEl.appendChild(details);
+    });
+  }
+
   function refresh() {
     if (!selectedServers().length) {
       showError(null);
       renderRows([]);
+      renderApiCalls([]);
       document.getElementById("lastUpdated").textContent = new Date().toLocaleTimeString();
       return Promise.resolve();
     }
@@ -1095,6 +1174,7 @@
       .then(function (data) {
         showError(null);
         renderRows(data.servers || [], data.totals);
+        renderApiCalls(data.api_calls);
         document.getElementById("lastUpdated").textContent = new Date().toLocaleTimeString();
       })
       .catch(function (err) {
