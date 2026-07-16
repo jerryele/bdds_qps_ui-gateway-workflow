@@ -825,10 +825,26 @@
   ];
 
   // History charts: at most 2 rows of at most 4 windows each (8 total) - if more than 8
-  // metrics are selected, only the first 8 in METRICS order get a chart (the table above
-  // still shows every selected column regardless).
+  // groups are selected, only the first 8 in this order get a chart (the table above still
+  // shows every selected column regardless). Disk read/write and network RX/TX each share
+  // one chart (two lines per server instead of two separate charts) - the table still shows
+  // them as separate columns.
   var MAX_HISTORY_CHARTS = 8;
   var MAX_CHARTS_PER_ROW = 4;
+
+  var CHART_GROUPS = [
+    { key: "dns_qps", label: "DNS QPS", metrics: ["dns_qps"], percent: false },
+    { key: "dhcp_lps", label: "DHCP LPS", metrics: ["dhcp_lps"], percent: false },
+    { key: "cache_hit_ratio", label: "Cache Hit %", metrics: ["cache_hit_ratio"], percent: true },
+    { key: "query_hit_ratio", label: "Query Hit %", metrics: ["query_hit_ratio"], percent: true },
+    { key: "cpu_percent", label: "CPU %", metrics: ["cpu_percent"], percent: true },
+    { key: "memory_percent", label: "Memory %", metrics: ["memory_percent"], percent: true },
+    { key: "disk_iops", label: "Disk IOPS", metrics: ["disk_read_iops", "disk_write_iops"], percent: false },
+    { key: "net_pps", label: "Network pkt/s", metrics: ["net_rx_pps", "net_tx_pps"], percent: false }
+  ];
+  // Used to disambiguate lines within a multi-metric chart group (e.g. "bdds251a Read" vs
+  // "bdds251a Write"); single-metric groups don't need this, their line is just the server name.
+  var METRIC_SHORT_LABEL = { disk_read_iops: "Read", disk_write_iops: "Write", net_rx_pps: "RX", net_tx_pps: "TX" };
 
   // Cache/render the last /current response so toggling a metric checkbox can redraw the
   // table instantly without a redundant round trip to the server.
@@ -1035,7 +1051,7 @@
       key.className = "legend-key";
       key.style.background = color;
       var label = document.createElement("span");
-      label.textContent = s.exported_instance;
+      label.textContent = s.label || s.exported_instance;
       item.appendChild(key);
       item.appendChild(label);
       legend.appendChild(item);
@@ -1086,7 +1102,7 @@
         key.style.background = SERIES_COLORS[i % SERIES_COLORS.length];
         var label = document.createElement("span");
         label.className = "tt-label";
-        label.textContent = s.exported_instance;
+        label.textContent = s.label || s.exported_instance;
         var value = document.createElement("span");
         value.className = "tt-value";
         value.textContent = pt ? formatValue(pt.v) : "-";
@@ -1120,39 +1136,48 @@
   // rows instantly without a redundant round trip, same as renderRows/lastServers.
   var lastHistorySeries = {};
 
-  function selectedChartMetrics() {
-    return selectedMetrics().slice(0, MAX_HISTORY_CHARTS);
+  function isMetricChecked(key) {
+    var cb = document.getElementById("metric-" + key);
+    return !cb || cb.checked;
   }
 
-  function chartIdsFor(m) {
-    return { svg: "historyChart-" + m.key, legend: "chartLegend-" + m.key, tooltip: "chartTooltip-" + m.key };
+  // A group appears if any one of its constituent metrics is checked (e.g. checking just
+  // "Disk Write IOPS" still shows the "Disk IOPS" chart, with only the Write lines on it).
+  function selectedChartGroups() {
+    return CHART_GROUPS
+      .filter(function (g) { return g.metrics.some(isMetricChecked); })
+      .slice(0, MAX_HISTORY_CHARTS);
+  }
+
+  function chartIdsFor(g) {
+    return { svg: "historyChart-" + g.key, legend: "chartLegend-" + g.key, tooltip: "chartTooltip-" + g.key };
   }
 
   // Fills the first row up to MAX_CHARTS_PER_ROW, overflowing any remainder into a second
   // row - with at most MAX_HISTORY_CHARTS selected this never needs a third row.
-  function chartRows(metrics) {
-    if (!metrics.length) return [];
-    if (metrics.length <= MAX_CHARTS_PER_ROW) return [metrics];
-    return [metrics.slice(0, MAX_CHARTS_PER_ROW), metrics.slice(MAX_CHARTS_PER_ROW)];
+  function chartRows(groups) {
+    if (!groups.length) return [];
+    if (groups.length <= MAX_CHARTS_PER_ROW) return [groups];
+    return [groups.slice(0, MAX_CHARTS_PER_ROW), groups.slice(MAX_CHARTS_PER_ROW)];
   }
 
-  function buildHistoryCharts(metrics) {
+  function buildHistoryCharts(groups) {
     var container = document.getElementById("historyChartsContainer");
     container.innerHTML = "";
-    chartRows(metrics).forEach(function (rowMetrics) {
+    chartRows(groups).forEach(function (rowGroups) {
       var row = document.createElement("div");
       row.className = "history-panels-row";
-      rowMetrics.forEach(function (m) {
+      rowGroups.forEach(function (g) {
         var section = document.createElement("section");
         section.className = "panel history-chart-panel";
         section.innerHTML =
           '<div class="chart-header">' +
-            '<span class="chart-title">' + m.label + '</span>' +
-            '<div class="chart-legend" id="chartLegend-' + m.key + '"></div>' +
+            '<span class="chart-title">' + g.label + '</span>' +
+            '<div class="chart-legend" id="chartLegend-' + g.key + '"></div>' +
           '</div>' +
           '<div class="chart-wrap">' +
-            '<svg id="historyChart-' + m.key + '" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>' +
-            '<div class="chart-tooltip" id="chartTooltip-' + m.key + '"></div>' +
+            '<svg id="historyChart-' + g.key + '" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>' +
+            '<div class="chart-tooltip" id="chartTooltip-' + g.key + '"></div>' +
           '</div>';
         row.appendChild(section);
       });
@@ -1160,12 +1185,34 @@
     });
   }
 
+  // For a single-metric group, lines are just that metric's per-server series unchanged.
+  // For a multi-metric group (disk/net), lines are per (server, checked metric), labeled
+  // e.g. "bdds251a Read" so they're distinguishable when both metrics are checked at once.
+  function chartLinesFor(group, series) {
+    if (group.metrics.length === 1) {
+      return series[group.metrics[0]] || [];
+    }
+    var lines = [];
+    group.metrics.forEach(function (metricKey) {
+      if (!isMetricChecked(metricKey)) return;
+      var shortLabel = METRIC_SHORT_LABEL[metricKey] || metricKey;
+      (series[metricKey] || []).forEach(function (s) {
+        lines.push({
+          exported_instance: s.exported_instance,
+          label: s.exported_instance + " " + shortLabel,
+          points: s.points,
+        });
+      });
+    });
+    return lines;
+  }
+
   function renderHistoryCharts(series) {
     series = series || {};
-    var metrics = selectedChartMetrics();
-    buildHistoryCharts(metrics);
-    metrics.forEach(function (m) {
-      renderChart(series[m.key] || [], chartIdsFor(m), m.percent ? PERCENT_CHART_OPTS : undefined);
+    var groups = selectedChartGroups();
+    buildHistoryCharts(groups);
+    groups.forEach(function (g) {
+      renderChart(chartLinesFor(g, series), chartIdsFor(g), g.percent ? PERCENT_CHART_OPTS : undefined);
     });
   }
 

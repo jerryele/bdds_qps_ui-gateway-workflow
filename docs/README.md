@@ -1,6 +1,6 @@
 <!-- Copyright 2026 BlueCat Networks (USA) Inc. and its affiliates. All Rights Reserved. -->
 
-Workflow Version: **1.7** <br/>
+Workflow Version: **1.8** <br/>
 Project Title: **BDDS Performance Statistics** <br/>
 Author: **jli@bluecatnetworks.com** <br/>
 Date: **15-07-2026** <br/>
@@ -58,15 +58,19 @@ Query Hit %, CPU %, Memory %, Disk Read/Write IOPS, Net RX/TX pkt/s); all ten ar
 fetched in one `/current` call, so toggling one is an instant client-side re-render, not a
 new request.
 
-The history charts below mirror that same selection: one chart per selected metric (in the
-same fixed METRICS order — DNS QPS, DHCP LPS, Cache Hit %, Query Hit %, CPU %, Memory %,
-Disk Read IOPS, Disk Write IOPS, Net RX pkt/s, Net TX pkt/s), laid out across up to two rows
-of up to four charts each (max 8 charts total — with all ten selected, the last two in that
-order are left off; deselect an earlier one to make room). Each row's charts split its width
-evenly, so 1 selected metric gets a full-width chart, 2 get half-width, etc. Percentage
-metrics (Cache Hit %, Query Hit %, CPU %, Memory %) get a fixed 0-100% Y axis; the rest
-auto-scale. Toggling a metric re-renders the chart rows from the already-fetched `/history`
-response, not a new request — same instant-re-render approach as the table.
+The history charts below mirror that same selection, grouped into 8 chart slots (in this
+fixed order): DNS QPS, DHCP LPS, Cache Hit %, Query Hit %, CPU %, Memory %, **Disk IOPS**,
+**Network pkt/s** — the last two each combine two metric columns (Disk Read + Disk Write,
+Net RX + Net TX) into one chart with a line per (server, metric), labeled e.g.
+"bdds251a Read" / "bdds251a Write" so they stay distinguishable. A chart slot shows if
+*either* of its metrics is checked in the panel above; checking only one still shows the
+chart with just that metric's lines. Charts lay out across up to two rows of up to four
+each (max 8 total — with everything checked, all 8 slots fit, since there are only 8 slots
+now). Each row's charts split its width evenly, so 1 selected slot gets a full-width chart,
+2 get half-width, etc. Percentage metrics (Cache Hit %, Query Hit %, CPU %, Memory %) get a
+fixed 0-100% Y axis; the rest auto-scale. Toggling a metric re-renders the chart rows from
+the already-fetched `/history` response, not a new request — same instant-re-render approach
+as the table.
 
 Below that, an "API calls to BAM's Prometheus" panel lists every PromQL request the latest
 `/current` call made, each collapsed to its query string by default — expand one to see the
@@ -79,6 +83,9 @@ Known Errors and Bugs:
 - Server-side rate is only as fresh as BAM's Prometheus scrape interval (1 minute).
 
 Change Log:
+- 2026-07-15: Disk Read/Write and Net RX/TX each now share one history chart (two lines per
+  server) instead of two separate charts, so all 8 chart slots fit at once with everything
+  checked.
 - 2026-07-15: History charts are now dynamic - one per selected metric (up to 8, 2 rows of
   up to 4), replacing the old fixed set of 4. Added `/history` series for CPU %, Memory %,
   Disk Read/Write IOPS, and Network RX/TX pkt/s to match.
